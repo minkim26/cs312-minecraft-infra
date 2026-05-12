@@ -1,0 +1,128 @@
+---
+- name: Configure Minecraft server on EC2
+  hosts: minecraft
+  become: true
+
+  tasks:
+
+    # ── Task 1: Install Docker prerequisites ─────────────────────────────────
+    - name: Install Docker prerequisites
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+        state: present
+        update_cache: true
+
+    # ── Task 2: Add Docker GPG key ───────────────────────────────────────────
+    - name: Add Docker GPG key
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    # ── Task 3: Add Docker apt repository ───────────────────────────────────
+    - name: Add Docker apt repository
+      apt_repository:
+        repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+        state: present
+
+    # ── Task 4: Install Docker Engine ───────────────────────────────────────
+    - name: Install Docker Engine
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-compose-plugin
+        state: present
+
+    # ── Task 5: Ensure Docker is started and enabled ─────────────────────────
+    - name: Ensure Docker service is started and enabled
+      service:
+        name: docker
+        state: started
+        enabled: true
+
+    # ── Task 6: Install AWS CLI v2 ───────────────────────────────────────────
+    - name: Install AWS CLI v2
+      shell: |
+        curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o /tmp/awscliv2.zip
+        unzip -q /tmp/awscliv2.zip -d /tmp/
+        /tmp/aws/install
+      args:
+        creates: /usr/local/bin/aws   # idempotency guard: skip if binary already present
+
+    # ── Task 7: Authenticate Docker to ECR via instance profile ─────────────
+    - name: Authenticate Docker to ECR using instance profile (LabRole)
+      shell: >
+        aws ecr get-login-password --region {{ aws_region }} |
+        docker login --username AWS --password-stdin {{ ecr_registry }}
+      changed_when: true   # Token expires every 12 h; intentionally always runs
+
+    # ── Task 8: Pull pinned Minecraft image from ECR ─────────────────────────
+    - name: Pull Minecraft image from ECR
+      docker_image:
+        name: "{{ ecr_registry }}/{{ ecr_repo_name }}:{{ minecraft_image_tag }}"
+        source: pull
+        force_source: false   # Only downloads if digest differs from local cache
+
+    # ── Task 9: Create persistent data directory ─────────────────────────────
+    - name: Create Minecraft data directory
+      file:
+        path: "{{ minecraft_data_dir }}"
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+        mode: '0755'
+
+    # ── Task 10: Conditional S3 world restore ────────────────────────────────
+    - name: Check for restore marker
+      stat:
+        path: "{{ minecraft_data_dir }}/.s3_restored"
+      register: restore_marker
+
+    - name: Download latest world backup from S3
+      shell: |
+        LATEST=$(aws s3 ls s3://{{ s3_bucket }}/backups/ | sort | tail -1 | awk '{print $4}')
+        aws s3 cp s3://{{ s3_bucket }}/backups/$LATEST /tmp/world-restore.tar.gz
+      when: restore_from_s3 | bool and not restore_marker.stat.exists
+
+    - name: Stop container before restore (if already running)
+      docker_container:
+        name: minecraft
+        state: stopped
+      ignore_errors: true
+      when: restore_from_s3 | bool and not restore_marker.stat.exists
+
+    - name: Extract world backup into data directory
+      unarchive:
+        src: /tmp/world-restore.tar.gz
+        dest: /
+        remote_src: true
+      when: restore_from_s3 | bool and not restore_marker.stat.exists
+
+    - name: Write restore marker to prevent accidental double-restore
+      file:
+        path: "{{ minecraft_data_dir }}/.s3_restored"
+        state: touch
+      when: restore_from_s3 | bool and not restore_marker.stat.exists
+
+    # ── Task 11: Start Minecraft server container ────────────────────────────
+    - name: Start Minecraft server container
+      docker_container:
+        name: minecraft
+        image: "{{ ecr_registry }}/{{ ecr_repo_name }}:{{ minecraft_image_tag }}"
+        state: started
+        restart_policy: unless-stopped
+        ports:
+          - "25565:25565"
+        volumes:
+          - "{{ minecraft_data_dir }}:/data"
+        env:
+          EULA: "TRUE"
+          VERSION: "1.21.4"
+          MOTD: "Minsu Kim | 934445327"
+          MEMORY: "3G"

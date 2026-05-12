@@ -1,0 +1,10 @@
+# These values are stable across sessions — set once.
+ecr_registry:      "339712777428.dkr.ecr.us-east-1.amazonaws.com"
+ecr_repo_name:     "cs312-minecraft"
+minecraft_image_tag: "mc-1.21.4-v1"
+minecraft_data_dir:  "/opt/minecraft/data"
+aws_region:          "us-east-1"
+s3_bucket:           "cs312-minsu-kim-mc-backups"
+
+# restore_from_s3 defaults to false — pass -e restore_from_s3=true at rebuild time
+restore_from_s3: false

@@ -1,0 +1,8 @@
+# State files — never commit to a public repo
+terraform.tfstate
+terraform.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+
+# Vars file contains your SSH CIDR — keep private
+terraform.tfvars
