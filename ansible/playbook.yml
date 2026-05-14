@@ -96,10 +96,7 @@
       when: restore_from_s3 | bool and not restore_marker.stat.exists
 
     - name: Stop container before restore (if already running)
-      docker_container:
-        name: minecraft
-        state: stopped
-      ignore_errors: true
+      shell: docker stop minecraft 2>/dev/null || true
       when: restore_from_s3 | bool and not restore_marker.stat.exists
 
     - name: Extract world backup into data directory
