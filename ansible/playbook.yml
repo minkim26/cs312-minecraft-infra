@@ -47,13 +47,18 @@
         enabled: true
 
     # ── Task 6: Install AWS CLI v2 ───────────────────────────────────────────
+    - name: Install unzip (required for AWS CLI installer)
+      apt:
+        name: unzip
+        state: present
+
     - name: Install AWS CLI v2
       shell: |
         curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o /tmp/awscliv2.zip
         unzip -q /tmp/awscliv2.zip -d /tmp/
         /tmp/aws/install
       args:
-        creates: /usr/local/bin/aws   # idempotency guard: skip if binary already present
+        creates: /usr/local/bin/aws
 
     # ── Task 7: Authenticate Docker to ECR via instance profile ─────────────
     - name: Authenticate Docker to ECR using instance profile (LabRole)
