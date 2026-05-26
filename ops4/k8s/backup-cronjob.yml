@@ -1,0 +1,53 @@
+# Backup runs hourly, prunes archives older than 7 days.
+# IAM auth: the pod inherits LabRole from the EC2 instance profile via the
+# EC2 metadata service — no credentials are stored in this manifest.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: minecraft-backup
+  namespace: minecraft
+spec:
+  schedule: "0 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: backup
+              image: amazon/aws-cli:latest
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: S3_BUCKET
+                  value: "cs312-minsu-kim-mc-backups"
+                - name: AWS_DEFAULT_REGION
+                  value: "us-east-1"
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  yum install -y tar gzip -q
+                  TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+                  ARCHIVE="/tmp/world-${TIMESTAMP}.tar.gz"
+                  tar -czf "$ARCHIVE" -C /data .
+                  aws s3 cp "$ARCHIVE" "s3://${S3_BUCKET}/backups/world-${TIMESTAMP}.tar.gz"
+                  # Prune objects older than 7 days
+                  CUTOFF=$(date -d '7 days ago' +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -v-7d +%Y-%m-%dT%H:%M:%S)
+                  aws s3 ls "s3://${S3_BUCKET}/backups/" | while read -r line; do
+                    OBJECT_DATE=$(echo "$line" | awk '{print $1"T"$2}')
+                    OBJECT_KEY=$(echo "$line" | awk '{print $4}')
+                    if [ -n "$OBJECT_KEY" ] && [[ "$OBJECT_DATE" < "$CUTOFF" ]]; then
+                      aws s3 rm "s3://${S3_BUCKET}/backups/${OBJECT_KEY}"
+                    fi
+                  done
+              volumeMounts:
+                - name: world-data
+                  mountPath: /data
+                  readOnly: true
+          volumes:
+            - name: world-data
+              persistentVolumeClaim:
+                claimName: minecraft-pvc

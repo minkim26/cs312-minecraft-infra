@@ -1,0 +1,21 @@
+# Storage tradeoff: hostPath ties world data to this node's local EBS disk.
+# This is acceptable for single-node k3s; the instance is long-lived and data
+# persists across pod restarts and redeploys. If the EC2 instance is terminated,
+# the S3 CronJob backups are the authoritative recovery source — restore by
+# running the Ansible playbook with restore_from_s3=true on a new instance.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: minecraft-pv
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  # Empty storageClassName prevents k3s's dynamic local-path provisioner
+  # from intercepting this PV and creating a separate unrelated volume.
+  storageClassName: ""
+  hostPath:
+    path: /opt/minecraft/data
+    type: DirectoryOrCreate

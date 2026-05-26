@@ -1,0 +1,10 @@
+aws_region:    "us-east-1"
+ecr_registry:  "339712777428.dkr.ecr.us-east-1.amazonaws.com"
+ecr_repo_name: "cs312-minecraft"
+
+# Pinned image tag — change to v2 for the rollout demo
+minecraft_image_tag: "v1"
+
+minecraft_data_dir: "/opt/minecraft/data"
+s3_bucket: "cs312-minsu-kim-mc-backups"
+restore_from_s3: false

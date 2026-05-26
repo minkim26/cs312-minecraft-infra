@@ -1,1 +1,17 @@
 .DS_Store
+
+# Submission documents and context files
+*.docx
+ops4-claude-code-context.md
+ops4/requirements.md
+ops4/DRY-RUN.md
+
+# Terraform secrets and state
+ops4/terraform.tfstate
+ops4/terraform/terraform.tfvars
+ops4/terraform/terraform.tfstate
+ops4/terraform/terraform.tfstate.backup
+ops4/terraform/.terraform/
+
+# Ansible live inventory (contains real IPs)
+ops4/ansible/inventory.ini

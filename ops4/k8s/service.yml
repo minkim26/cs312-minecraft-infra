@@ -1,0 +1,17 @@
+# On single-node k3s, ServiceLB (klipper-lb) binds port 25565 directly on the
+# host network interface. The EC2 public IP is the player-facing endpoint.
+# No AWS load balancer is provisioned.
+apiVersion: v1
+kind: Service
+metadata:
+  name: minecraft
+  namespace: minecraft
+spec:
+  type: LoadBalancer
+  selector:
+    app: minecraft
+  ports:
+    - name: minecraft
+      protocol: TCP
+      port: 25565
+      targetPort: 25565

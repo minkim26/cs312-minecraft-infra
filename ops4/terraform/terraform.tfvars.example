@@ -1,0 +1,8 @@
+aws_region     = "us-east-1"
+instance_type  = "t3.medium"
+ami_id         = "ami-0c7217cdde317cfec"   # Ubuntu 24.04 LTS, us-east-1 — verify in EC2 console
+key_name       = "my-lab-keypair"
+ssh_cidr       = "1.2.3.4/32"
+volume_size_gb = 30
+s3_bucket_name = "cs312-minsu-kim-mc-backups"
+ecr_repo_name  = "cs312-minecraft"

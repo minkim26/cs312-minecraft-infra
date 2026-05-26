@@ -1,0 +1,84 @@
+# Refreshes the ecr-pull-secret every 6 hours so rollouts to new image tags
+# can always pull from ECR. ECR tokens expire after 12 hours; 6-hour cadence
+# keeps at least one full token lifetime of headroom.
+#
+# Auth: the pod uses the EC2 instance profile via the metadata service for
+# aws ecr get-login-password — no credentials are stored in this manifest.
+# kubectl is invoked in-cluster using the ecr-refresher ServiceAccount token.
+#
+# Manual trigger (e.g., before rolling out a new image tag):
+#   kubectl create job --from=cronjob/ecr-token-refresh ecr-refresh-now -n minecraft
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ecr-refresher
+  namespace: minecraft
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: secret-patcher
+  namespace: minecraft
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ecr-refresher-secret-patcher
+  namespace: minecraft
+subjects:
+  - kind: ServiceAccount
+    name: ecr-refresher
+    namespace: minecraft
+roleRef:
+  kind: Role
+  name: secret-patcher
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ecr-token-refresh
+  namespace: minecraft
+spec:
+  schedule: "0 */6 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: ecr-refresher
+          restartPolicy: OnFailure
+          containers:
+            - name: refresh
+              image: amazon/aws-cli:latest
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: ECR_REGISTRY
+                  value: "339712777428.dkr.ecr.us-east-1.amazonaws.com"
+                - name: AWS_DEFAULT_REGION
+                  value: "us-east-1"
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  # kubectl is a static binary; download a pinned version once per run.
+                  curl -sLo /usr/local/bin/kubectl \
+                    "https://dl.k8s.io/release/v1.31.0/bin/linux/amd64/kubectl"
+                  chmod +x /usr/local/bin/kubectl
+
+                  TOKEN=$(aws ecr get-login-password --region "${AWS_DEFAULT_REGION}")
+
+                  kubectl create secret docker-registry ecr-pull-secret \
+                    --namespace minecraft \
+                    --docker-server="${ECR_REGISTRY}" \
+                    --docker-username=AWS \
+                    --docker-password="${TOKEN}" \
+                    --dry-run=client -o yaml | kubectl apply -f -
+
+                  echo "ECR pull secret refreshed at $(date -u)"

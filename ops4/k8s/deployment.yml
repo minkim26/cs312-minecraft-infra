@@ -1,0 +1,100 @@
+# Failure drill — bad deploy (broken image tag):
+#
+#   # Step 1: introduce the failure — set a nonexistent image tag
+#   kubectl set image deployment/minecraft \
+#     minecraft=339712777428.dkr.ecr.us-east-1.amazonaws.com/cs312-minecraft:nonexistent-tag \
+#     --namespace minecraft
+#
+#   # Step 2: watch the rollout fail (shows ImagePullBackOff)
+#   kubectl rollout status deployment/minecraft --namespace minecraft
+#   kubectl describe pod -l app=minecraft --namespace minecraft
+#
+#   # Step 3: roll back to the previous working version
+#   kubectl rollout undo deployment/minecraft --namespace minecraft
+#
+#   # Step 4: confirm recovery
+#   kubectl rollout status deployment/minecraft --namespace minecraft
+#   kubectl rollout history deployment/minecraft --namespace minecraft
+#
+# Rollout demo (v1 → v2 → v1):
+#
+#   kubectl set image deployment/minecraft \
+#     minecraft=339712777428.dkr.ecr.us-east-1.amazonaws.com/cs312-minecraft:v2 \
+#     --namespace minecraft
+#   kubectl rollout status deployment/minecraft --namespace minecraft
+#
+#   kubectl rollout undo deployment/minecraft --namespace minecraft
+#   kubectl rollout status deployment/minecraft --namespace minecraft
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minecraft
+  namespace: minecraft
+spec:
+  replicas: 1
+  # Recreate (not RollingUpdate): the PVC is ReadWriteOnce; two pods cannot
+  # mount it simultaneously on single-node k3s.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: minecraft
+  template:
+    metadata:
+      labels:
+        app: minecraft
+    spec:
+      imagePullSecrets:
+        - name: ecr-pull-secret
+      containers:
+        - name: minecraft
+          # Replace <YOUR_AWS_ACCOUNT_ID> with your 12-digit AWS account number.
+          image: 339712777428.dkr.ecr.us-east-1.amazonaws.com/cs312-minecraft:v1
+          # IfNotPresent: the ECR token (valid 12h) only needs to be valid at
+          # pod start; subsequent restarts reuse the already-pulled image layer cache.
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: minecraft-config
+          ports:
+            - containerPort: 25565
+              protocol: TCP
+          volumeMounts:
+            - name: world-data
+              mountPath: /data
+          resources:
+            # JVM configured with MEMORY=3G heap; 3500Mi limit leaves ~500Mi for
+            # JVM overhead (metaspace, GC threads, off-heap). t3.medium has 4 GB
+            # total; 2000m CPU limit prevents starving k3s system pods.
+            requests:
+              cpu:    "500m"
+              memory: "1Gi"
+            limits:
+              cpu:    "2000m"
+              memory: "3500Mi"
+          # startupProbe gives the JVM up to 5 minutes (30 × 10s) before liveness
+          # activates, preventing restart loops during cold world load. TCP socket
+          # is the strongest probe available without a custom health endpoint in
+          # itzg/minecraft-server; open port is weaker than true app readiness but
+          # is the accepted baseline for this image.
+          startupProbe:
+            tcpSocket:
+              port: 25565
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 30
+          livenessProbe:
+            tcpSocket:
+              port: 25565
+            periodSeconds: 30
+            failureThreshold: 3
+          readinessProbe:
+            tcpSocket:
+              port: 25565
+            periodSeconds: 10
+            failureThreshold: 3
+      volumes:
+        - name: world-data
+          persistentVolumeClaim:
+            claimName: minecraft-pvc

@@ -1,0 +1,138 @@
+---
+- name: Configure Minecraft k3s server on EC2
+  hosts: minecraft
+  become: true
+
+  tasks:
+
+    # ── Task 1: Install system prerequisites ─────────────────────────────────
+    - name: Install system prerequisites
+      apt:
+        name:
+          - curl
+          - unzip
+          - tar
+          - python3-pip
+        state: present
+        update_cache: true
+
+    # ── Task 2: Install AWS CLI v2 ────────────────────────────────────────────
+    - name: Install AWS CLI v2
+      shell: |
+        curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o /tmp/awscliv2.zip
+        unzip -q /tmp/awscliv2.zip -d /tmp/
+        /tmp/aws/install
+      args:
+        creates: /usr/local/bin/aws
+
+    # ── Task 3: Install k3s ───────────────────────────────────────────────────
+    - name: Check if k3s binary already exists
+      stat:
+        path: /usr/local/bin/k3s
+      register: k3s_binary
+
+    - name: Install k3s
+      shell: curl -sfL https://get.k3s.io | sh -
+      when: not k3s_binary.stat.exists
+
+    - name: Wait for k3s API server to become ready
+      wait_for:
+        port: 6443
+        host: 127.0.0.1
+        delay: 5
+        timeout: 120
+
+    # ── Task 4: Configure kubeconfig for ubuntu user ──────────────────────────
+    - name: Create .kube directory for ubuntu
+      shell: |
+        mkdir -p /home/ubuntu/.kube
+        cp /etc/rancher/k3s/k3s.yaml /home/ubuntu/.kube/config
+        chown ubuntu:ubuntu /home/ubuntu/.kube/config
+        chmod 600 /home/ubuntu/.kube/config
+
+    - name: Add KUBECONFIG to ubuntu .bashrc
+      lineinfile:
+        path: /home/ubuntu/.bashrc
+        line: "export KUBECONFIG=/home/ubuntu/.kube/config"
+        state: present
+
+    # ── Task 5: Create Minecraft data directory ───────────────────────────────
+    - name: Create Minecraft data directory
+      file:
+        path: "{{ minecraft_data_dir }}"
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+        mode: '0755'
+
+    # ── Task 6: S3 world restore (conditional) ────────────────────────────────
+    - name: Check for restore marker
+      stat:
+        path: "{{ minecraft_data_dir }}/.s3_restored"
+      register: restore_marker
+
+    - name: Download latest world backup from S3
+      shell: |
+        LATEST=$(aws s3 ls s3://{{ s3_bucket }}/backups/ | sort | tail -1 | awk '{print $4}')
+        aws s3 cp s3://{{ s3_bucket }}/backups/$LATEST /tmp/world-restore.tar.gz
+      when: restore_from_s3 | bool and not restore_marker.stat.exists
+
+    - name: Extract world backup into data directory
+      unarchive:
+        src: /tmp/world-restore.tar.gz
+        dest: /
+        remote_src: true
+      when: restore_from_s3 | bool and not restore_marker.stat.exists
+
+    - name: Write restore marker to prevent accidental double-restore
+      file:
+        path: "{{ minecraft_data_dir }}/.s3_restored"
+        state: touch
+      when: restore_from_s3 | bool and not restore_marker.stat.exists
+
+    # ── Task 7: Copy k8s manifests to host ───────────────────────────────────
+    # Must come before Task 8 so /tmp/k8s/namespace.yml exists when the secret task runs.
+    - name: Copy k8s manifests to remote host
+      copy:
+        src: "../k8s/"
+        dest: /tmp/k8s/
+
+    # ── Task 8: Apply namespace and create ECR imagePullSecret ────────────────
+    # Namespace must exist before the secret; token expires every 12h so always runs.
+    - name: Apply namespace and refresh ECR imagePullSecret
+      shell: |
+        kubectl apply -f /tmp/k8s/namespace.yml
+
+        TOKEN=$(aws ecr get-login-password --region {{ aws_region }})
+        kubectl create secret docker-registry ecr-pull-secret \
+          --namespace minecraft \
+          --docker-server={{ ecr_registry }} \
+          --docker-username=AWS \
+          --docker-password="$TOKEN" \
+          --dry-run=client -o yaml | kubectl apply -f -
+      become_user: ubuntu
+      environment:
+        KUBECONFIG: /home/ubuntu/.kube/config
+      changed_when: true
+
+    # ── Task 9: Apply all manifests in dependency order ───────────────────────
+    - name: Apply k8s manifests in dependency order
+      shell: |
+        kubectl apply -f /tmp/k8s/namespace.yml
+        kubectl apply -f /tmp/k8s/configmap.yml
+        kubectl apply -f /tmp/k8s/pv.yml
+        kubectl apply -f /tmp/k8s/pvc.yml
+        kubectl apply -f /tmp/k8s/deployment.yml
+        kubectl apply -f /tmp/k8s/service.yml
+        kubectl apply -f /tmp/k8s/backup-cronjob.yml
+        kubectl apply -f /tmp/k8s/ecr-token-refresh.yml
+      become_user: ubuntu
+      environment:
+        KUBECONFIG: /home/ubuntu/.kube/config
+
+    # ── Task 9: Wait for rollout ──────────────────────────────────────────────
+    - name: Wait for Minecraft deployment rollout
+      shell: kubectl rollout status deployment/minecraft --namespace minecraft --timeout=300s
+      become_user: ubuntu
+      environment:
+        KUBECONFIG: /home/ubuntu/.kube/config
