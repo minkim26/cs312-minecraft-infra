@@ -6,6 +6,8 @@ kind: Service
 metadata:
   name: minecraft
   namespace: minecraft
+  labels:
+    app: minecraft
 spec:
   type: LoadBalancer
   selector:
@@ -15,3 +17,7 @@ spec:
       protocol: TCP
       port: 25565
       targetPort: 25565
+    - name: mc-metrics
+      protocol: TCP
+      port: 8080
+      targetPort: 8080

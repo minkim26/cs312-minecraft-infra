@@ -1,0 +1,90 @@
+# Three actionable alerts for the Minecraft service.
+# Each is tied to an operator-visible symptom and linked to a runbook section.
+#
+# The label "release: kube-prom" must match the Helm release name so the
+# Prometheus Operator's ruleSelector picks this resource up.
+#
+# Alert 1 uses kube-state-metrics (always-present series) rather than
+# mc_status_healthy so the alert fires for ImagePullBackOff, OOMKill,
+# and crash loops alike — mc_status_healthy is absent when the pod never
+# starts, which makes "== 0" unreliable for bad-deploy scenarios.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: minecraft-alerts
+  namespace: monitoring
+  labels:
+    release: kube-prom
+spec:
+  groups:
+    - name: minecraft.rules
+      interval: 30s
+      rules:
+
+        # ── Alert 1: Player-visible deployment unavailable ───────────────────
+        # Symptom: no healthy replica is serving. Covers bad image tag
+        # (ImagePullBackOff), OOMKill, or any reason the pod is not Ready.
+        # kube_deployment_status_replicas_available is always present as long
+        # as the Deployment object exists, so the expression never goes absent.
+        # Runbook: ops5 runbook section "MinecraftDeploymentUnavailable".
+        - alert: MinecraftDeploymentUnavailable
+          expr: >
+            kube_deployment_status_replicas_available{
+              namespace="minecraft",
+              deployment="minecraft"
+            } < 1
+          for: 2m
+          labels:
+            severity: critical
+            namespace: minecraft
+          annotations:
+            summary: "Minecraft deployment has no available replicas"
+            description: >
+              The minecraft deployment in namespace minecraft has had zero
+              available replicas for 2 minutes. Players cannot connect.
+              Check pod status (kubectl get pods -n minecraft) and events
+              (kubectl describe deployment minecraft -n minecraft).
+            runbook_url: "See runbook: MinecraftDeploymentUnavailable"
+
+        # ── Alert 2: Container crash-looping ────────────────────────────────
+        # Symptom: Kubernetes restarting the container repeatedly, indicating
+        # a persistent startup failure (OOMKill, bad config, runtime error).
+        # Complements Alert 1: fires when the pod DOES start but keeps dying.
+        # Threshold: more than 3 restarts in a 15-minute window.
+        # Runbook: ops5 runbook section "MinecraftPodCrashLooping".
+        - alert: MinecraftPodCrashLooping
+          expr: >
+            rate(kube_pod_container_status_restarts_total{namespace="minecraft"}[15m]) * 900 > 3
+          for: 5m
+          labels:
+            severity: warning
+            namespace: minecraft
+          annotations:
+            summary: "Minecraft container is crash-looping"
+            description: >
+              Container {{ $labels.container }} in pod {{ $labels.pod }} has
+              restarted more than 3 times in the last 15 minutes. Check
+              kubectl describe pod and kubectl logs --previous for the cause.
+            runbook_url: "See runbook: MinecraftPodCrashLooping"
+
+        # ── Alert 3: Node disk usage high ────────────────────────────────────
+        # Symptom: root filesystem is filling up. Disk pressure threatens
+        # world data writes, S3 backup staging, and new chunk generation.
+        # At 90% Kubernetes begins evicting pods; 80% is the warning threshold.
+        # Runbook: ops5 runbook section "NodeDiskUsageHigh".
+        - alert: NodeDiskUsageHigh
+          expr: >
+            (1 - (node_filesystem_avail_bytes{mountpoint="/"}
+                  / node_filesystem_size_bytes{mountpoint="/"})) * 100 > 80
+          for: 5m
+          labels:
+            severity: warning
+            namespace: minecraft
+          annotations:
+            summary: "Node disk usage above 80%"
+            description: >
+              Root filesystem is {{ printf "%.0f" $value }}% full on
+              {{ $labels.instance }}. World data writes and S3 backup staging
+              may fail if this reaches 100%. Prune old container images, logs,
+              or backup staging files.
+            runbook_url: "See runbook: NodeDiskUsageHigh"

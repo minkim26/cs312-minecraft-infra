@@ -1,0 +1,29 @@
+# ServiceMonitor tells the Prometheus Operator to scrape the mc-monitor sidecar
+# running in the minecraft namespace.
+#
+# The label "release: kube-prom" must match the Helm release name so the
+# Prometheus Operator's serviceMonitorSelector picks this resource up.
+#
+# mc-monitor exports at /metrics on port 8080:
+#   minecraft_status_healthy                  — 1 if server responds to ping, 0 otherwise
+#   minecraft_status_players_online_count     — current connected player count
+#   minecraft_status_players_max_count        — configured player capacity
+#   minecraft_status_response_time_seconds    — round-trip time of the status check
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: minecraft-mc-monitor
+  namespace: monitoring
+  labels:
+    release: kube-prom
+spec:
+  namespaceSelector:
+    matchNames:
+      - minecraft
+  selector:
+    matchLabels:
+      app: minecraft
+  endpoints:
+    - port: mc-metrics
+      interval: 30s
+      path: /metrics

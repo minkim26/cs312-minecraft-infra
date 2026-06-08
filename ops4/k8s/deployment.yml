@@ -48,6 +48,23 @@ spec:
       imagePullSecrets:
         - name: ecr-pull-secret
       containers:
+        - name: mc-monitor
+          image: itzg/mc-monitor:latest
+          args:
+            - export-for-prometheus
+            - -servers
+            - 127.0.0.1:25565
+          ports:
+            - name: mc-metrics
+              containerPort: 8080
+              protocol: TCP
+          resources:
+            requests:
+              cpu:    "10m"
+              memory: "16Mi"
+            limits:
+              cpu:    "100m"
+              memory: "64Mi"
         - name: minecraft
           # Replace <YOUR_AWS_ACCOUNT_ID> with your 12-digit AWS account number.
           image: 339712777428.dkr.ecr.us-east-1.amazonaws.com/cs312-minecraft:v1
@@ -64,15 +81,15 @@ spec:
             - name: world-data
               mountPath: /data
           resources:
-            # JVM configured with MEMORY=3G heap; 3500Mi limit leaves ~500Mi for
+            # JVM configured with MEMORY=2G heap; 2500Mi limit leaves ~500Mi for
             # JVM overhead (metaspace, GC threads, off-heap). t3.medium has 4 GB
-            # total; 2000m CPU limit prevents starving k3s system pods.
+            # total; monitoring stack uses ~1.1 Gi leaving ~2.5 Gi for Minecraft.
             requests:
               cpu:    "500m"
               memory: "1Gi"
             limits:
               cpu:    "2000m"
-              memory: "3500Mi"
+              memory: "2500Mi"
           # startupProbe gives the JVM up to 5 minutes (30 × 10s) before liveness
           # activates, preventing restart loops during cold world load. TCP socket
           # is the strongest probe available without a custom health endpoint in

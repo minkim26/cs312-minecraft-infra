@@ -47,6 +47,14 @@ resource "aws_security_group" "minecraft" {
     cidr_blocks = [var.ssh_cidr]
   }
 
+  ingress {
+    description = "Grafana dashboard (operator IP only; Grafana enforces built-in auth)"
+    from_port   = 30300
+    to_port     = 30300
+    protocol    = "tcp"
+    cidr_blocks = [var.ssh_cidr]
+  }
+
   egress {
     from_port   = 0
     to_port     = 0

@@ -7,6 +7,6 @@ data:
   EULA: "TRUE"
   VERSION: "1.21.4"
   MOTD: "Minsu Kim | 934445327"
-  MEMORY: "3G"
+  MEMORY: "2G"
   TYPE: "VANILLA"
   SKIP_SERVER_PROPERTIES: "false"

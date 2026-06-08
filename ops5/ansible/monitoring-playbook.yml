@@ -1,0 +1,126 @@
+---
+# Ops 5 monitoring deployment playbook.
+# Installs kube-prometheus-stack via Helm and applies the supporting k8s
+# manifests (ServiceMonitor, PrometheusRule, Grafana dashboard ConfigMap).
+# Also re-applies the updated ops4 Deployment and Service (which now include
+# the mc-monitor sidecar and mc-metrics port).
+#
+# Prerequisites:
+#   - k3s running on the target host (ops4 playbook already run)
+#   - ops4/ansible/inventory.ini and group_vars/minecraft.yml present
+#
+# Run:
+#   ansible-playbook -i ../ops4/ansible/inventory.ini monitoring-playbook.yml
+
+- name: Deploy Ops 5 monitoring stack
+  hosts: minecraft
+  become: true
+
+  tasks:
+
+    # ── Task 1: Install Helm ──────────────────────────────────────────────────
+    - name: Check if Helm is already installed
+      stat:
+        path: /usr/local/bin/helm
+      register: helm_binary
+
+    - name: Install Helm via get-helm-3 script
+      shell: |
+        curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      when: not helm_binary.stat.exists
+
+    # ── Task 2: Add prometheus-community Helm repo ────────────────────────────
+    - name: Add prometheus-community Helm repo
+      shell: |
+        helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+        helm repo update
+      become_user: ubuntu
+      environment:
+        KUBECONFIG: /home/ubuntu/.kube/config
+        HOME: /home/ubuntu
+
+    # ── Task 3: Copy Helm values to remote host ───────────────────────────────
+    - name: Copy kube-prom Helm values to remote host
+      copy:
+        src: "../helm/kube-prom-values.yaml"
+        dest: /tmp/kube-prom-values.yaml
+
+    # ── Task 4: Deploy kube-prometheus-stack ─────────────────────────────────
+    # upgrade --install is idempotent: installs on first run, upgrades on subsequent runs.
+    - name: Deploy kube-prometheus-stack
+      shell: >
+        helm upgrade --install kube-prom
+        prometheus-community/kube-prometheus-stack
+        --namespace monitoring
+        --create-namespace
+        --values /tmp/kube-prom-values.yaml
+        --timeout 10m
+        --wait
+      become_user: ubuntu
+      environment:
+        KUBECONFIG: /home/ubuntu/.kube/config
+        HOME: /home/ubuntu
+
+    # ── Task 5: Copy ops5 k8s manifests to remote host ───────────────────────
+    - name: Copy ops5 k8s manifests to remote host
+      copy:
+        src: "../k8s/"
+        dest: /tmp/k8s-ops5/
+
+    # ── Task 6: Apply ops5 monitoring manifests ───────────────────────────────
+    # Order: namespace (already created by Helm --create-namespace, applying
+    # again is a no-op) → dashboard ConfigMap → ServiceMonitor → PrometheusRule
+    - name: Apply ops5 k8s manifests
+      shell: |
+        kubectl apply -f /tmp/k8s-ops5/monitoring-namespace.yml
+        kubectl apply -f /tmp/k8s-ops5/grafana-dashboard-configmap.yml
+        kubectl apply -f /tmp/k8s-ops5/minecraft-servicemonitor.yml
+        kubectl apply -f /tmp/k8s-ops5/minecraft-prometheusrule.yml
+      become_user: ubuntu
+      environment:
+        KUBECONFIG: /home/ubuntu/.kube/config
+
+    # ── Task 7: Re-apply updated ops4 Deployment and Service ─────────────────
+    # The ops4 Deployment now includes the mc-monitor sidecar; the Service
+    # exposes port 8080 (mc-metrics) for the ServiceMonitor to scrape.
+    - name: Copy updated ops4 k8s manifests to remote host
+      copy:
+        src: "../../ops4/k8s/"
+        dest: /tmp/k8s/
+
+    - name: Apply updated Deployment and Service
+      shell: |
+        kubectl apply -f /tmp/k8s/deployment.yml
+        kubectl apply -f /tmp/k8s/service.yml
+      become_user: ubuntu
+      environment:
+        KUBECONFIG: /home/ubuntu/.kube/config
+
+    # ── Task 8: Wait for Minecraft deployment rollout ────────────────────────
+    - name: Wait for Minecraft deployment rollout (includes mc-monitor sidecar)
+      shell: kubectl rollout status deployment/minecraft --namespace minecraft --timeout=300s
+      become_user: ubuntu
+      environment:
+        KUBECONFIG: /home/ubuntu/.kube/config
+
+    # ── Task 9: Wait for Prometheus to be ready ───────────────────────────────
+    # The Prometheus StatefulSet is spawned by the Prometheus Operator after Helm
+    # completes, so its exact generated name varies. Use a label selector instead
+    # of a hardcoded StatefulSet name to avoid a name-mismatch failure.
+    - name: Wait for Prometheus pod to be ready
+      shell: |
+        kubectl wait --for=condition=Ready pod \
+          -l app.kubernetes.io/name=prometheus \
+          --namespace monitoring \
+          --timeout=300s
+      become_user: ubuntu
+      environment:
+        KUBECONFIG: /home/ubuntu/.kube/config
+
+    # ── Task 10: Print access info ────────────────────────────────────────────
+    - name: Print Grafana access information
+      debug:
+        msg: >
+          Grafana is available at http://{{ ansible_host }}:30300
+          Username: admin  Password: admin
+          (Port 30300 must be open to your IP in the security group)
