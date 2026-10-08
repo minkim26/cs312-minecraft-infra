@@ -31,7 +31,7 @@ jobs:
           REPO:     ${{ secrets.ECR_REPO }}
           TAG:      ${{ github.ref_name }}
         run: |
-          docker build -t $REGISTRY/$REPO:$TAG .
+          docker build -t $REGISTRY/$REPO:$TAG ops2
 
       - name: Smoke test — verify server initialises without errors
         env:
